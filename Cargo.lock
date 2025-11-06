@@ -5729,7 +5729,7 @@ dependencies = [
  "ream-discv5",
  "ream-execution-engine",
  "ream-executor",
- "ream-fork-choice",
+ "ream-fork-choice-beacon",
  "ream-light-client",
  "ream-network-spec",
  "ream-operation-pool",
