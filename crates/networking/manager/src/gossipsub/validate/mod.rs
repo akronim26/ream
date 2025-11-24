@@ -8,3 +8,4 @@ pub mod result;
 pub mod sync_committee;
 pub mod sync_committee_contribution_and_proof;
 pub mod voluntary_exit;
+pub mod light_client_finality_update;

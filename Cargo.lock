@@ -5691,6 +5691,7 @@ dependencies = [
  "ream-execution-engine",
  "ream-executor",
  "ream-fork-choice",
+ "ream-light-client",
  "ream-network-spec",
  "ream-operation-pool",
  "ream-p2p",

@@ -41,6 +41,7 @@ ream-polynomial-commitments.workspace = true
 ream-storage.workspace = true
 ream-syncer.workspace = true
 ream-validator-beacon.workspace = true
+ream-light-client.workspace = true
 
 [lints]
 workspace = true
