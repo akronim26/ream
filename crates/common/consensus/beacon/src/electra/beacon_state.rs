@@ -185,7 +185,7 @@ pub struct BeaconState {
     pub justification_bits: BitVector<U4>,
     pub previous_justified_checkpoint: Checkpoint,
     pub current_justified_checkpoint: Checkpoint,
-    pub finalized_checkpoint: Checkpoint,
+    pub finalized_checkpoint: Checkpoint, 
 
     // Inactivity
     #[serde(with = "quoted_u64_var_list")]
