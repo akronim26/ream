@@ -4,6 +4,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use alloy_primitives::FixedBytes;
 use serde::{Deserialize, Deserializer};
 use tracing::warn;
 
@@ -17,17 +18,17 @@ pub static LEAN_NETWORK_SPEC: OnceLock<Arc<LeanNetworkSpec>> = OnceLock::new();
 ///
 /// The static `LeanNetworkSpec` can be accessed using [lean_network_spec].
 pub fn set_lean_network_spec(network_spec: Arc<LeanNetworkSpec>) {
-    HAS_NETWORK_SPEC_BEEN_INITIALIZED.call_once(|| {
-        LEAN_NETWORK_SPEC
-            .set(network_spec)
-            .expect("LeanNetworkSpec should be set only once at the start of the application");
-    });
-
     if HAS_NETWORK_SPEC_BEEN_INITIALIZED.is_completed() {
         warn!(
             "LeanNetworkSpec has already been initialized. Subsequent calls to set_lean_network_spec will be ignored. If this is production code, this is likely a bug."
         );
     }
+
+    HAS_NETWORK_SPEC_BEEN_INITIALIZED.call_once(|| {
+        LEAN_NETWORK_SPEC
+            .set(network_spec)
+            .expect("LeanNetworkSpec should be set only once at the start of the application");
+    });
 }
 
 /// Returns the static [LeanNetworkSpec] initialized by [set_lean_network_spec].
@@ -72,6 +73,12 @@ fn default_seconds_per_slot() -> u64 {
 #[serde(rename_all = "UPPERCASE")]
 pub struct LeanNetworkSpec {
     pub genesis_time: u64,
+    #[serde(alias = "VALIDATOR_COUNT")]
+    pub num_validators: u64,
+
+    #[serde(alias = "GENESIS_VALIDATORS")]
+    pub validator_public_keys: Vec<FixedBytes<52>>,
+
     #[serde(default = "default_justification_lookback_slots")]
     pub justification_lookback_slots: u64,
     #[serde(default = "default_seconds_per_slot")]
@@ -80,9 +87,6 @@ pub struct LeanNetworkSpec {
     /// Skipped in YAML, defaults to Devnet::One
     #[serde(skip)]
     pub devnet: Devnet,
-
-    #[serde(skip, alias = "VALIDATOR_COUNT")]
-    pub num_validators: u64,
 
     /// Capture any extra fields we aren't interested in
     #[serde(flatten)]
@@ -98,11 +102,16 @@ impl LeanNetworkSpec {
             .expect("System time is before UNIX epoch")
             .as_secs();
 
+        let config: &str = include_str!("../../../../../bin/ream/assets/lean/config.yaml");
+        let config = serde_yaml::from_str::<LeanNetworkSpec>(config)
+            .expect("Our sample config should always be correct");
+
         Self {
             genesis_time: current_timestamp + 10,
             justification_lookback_slots: 3,
             seconds_per_slot: 4,
-            num_validators: 3,
+            num_validators: config.num_validators,
+            validator_public_keys: config.validator_public_keys,
             devnet: Devnet::One,
             discarded_values: DiscardUnknown,
         }

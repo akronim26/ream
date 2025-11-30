@@ -2,6 +2,7 @@ pub mod account_manager;
 pub mod beacon_node;
 pub mod constants;
 pub mod generate_private_key;
+pub mod generate_validator_registry;
 pub mod import_keystores;
 pub mod lean_node;
 pub mod validator_node;
@@ -17,6 +18,7 @@ use crate::cli::{
     account_manager::AccountManagerConfig,
     beacon_node::BeaconNodeConfig,
     generate_private_key::GeneratePrivateKeyConfig,
+    generate_validator_registry::GenerateValidatorRegistryConfig,
     lean_node::LeanNodeConfig,
     validator_node::ValidatorNodeConfig,
     verbosity::{Verbosity, verbosity_parser},
@@ -75,6 +77,10 @@ pub enum Commands {
     /// Generate a secp256k1 keypair for lean node
     #[command(name = "generate_private_key")]
     GeneratePrivateKey(Box<GeneratePrivateKeyConfig>),
+
+    /// Generate a validator registry config
+    #[command(name = "generate_validator_registry")]
+    GenerateKeystore(Box<GenerateValidatorRegistryConfig>),
 }
 
 #[cfg(test)]
@@ -98,7 +104,7 @@ mod tests {
             "5",
             "lean_node",
             "--network",
-            "./assets/lean/sample_spec.yml",
+            "./assets/lean/config.yaml",
             "--validator-registry-path",
             "./assets/lean/validator_registry.yml",
             // Test for alias of `private-key-path`
@@ -116,11 +122,10 @@ mod tests {
                 );
 
                 // Verify the network spec was loaded from the YAML file (sample_spec.yml)
-                assert_eq!(config.network.seconds_per_slot, 12);
-                assert_eq!(config.network.genesis_time, 0);
+                assert_eq!(config.network.seconds_per_slot, 4);
                 assert_eq!(config.network.justification_lookback_slots, 3);
                 // Will be set later in main.rs
-                assert_eq!(config.network.num_validators, 0);
+                assert_eq!(config.network.num_validators, 3);
 
                 assert_eq!(
                     config.private_key_path.as_ref().unwrap().to_str().unwrap(),

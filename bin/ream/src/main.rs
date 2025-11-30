@@ -13,38 +13,42 @@ use clap::Parser;
 use libp2p_identity::secp256k1;
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
-use ream::cli::{
-    Cli, Commands,
-    account_manager::AccountManagerConfig,
-    beacon_node::BeaconNodeConfig,
-    generate_private_key::GeneratePrivateKeyConfig,
-    import_keystores::{load_keystore_directory, load_password_from_config, process_password},
-    lean_node::LeanNodeConfig,
-    validator_node::ValidatorNodeConfig,
-    voluntary_exit::VoluntaryExitConfig,
+use ream::{
+    cli::{
+        Cli, Commands,
+        account_manager::AccountManagerConfig,
+        beacon_node::BeaconNodeConfig,
+        generate_private_key::GeneratePrivateKeyConfig,
+        generate_validator_registry::run_generate_validator_registry,
+        import_keystores::{load_keystore_directory, load_password_from_config, process_password},
+        lean_node::LeanNodeConfig,
+        validator_node::ValidatorNodeConfig,
+        voluntary_exit::VoluntaryExitConfig,
+    },
+    startup_message::startup_message,
 };
 use ream_account_manager::{message_types::MessageType, seed::derive_seed_with_user_input};
 use ream_api_types_beacon::id::ValidatorID;
 use ream_api_types_common::id::ID;
 use ream_chain_lean::{
-    genesis as lean_genesis, messages::LeanChainServiceMessage, p2p_request::LeanP2PRequest,
-    service::LeanChainService,
+    messages::LeanChainServiceMessage, p2p_request::LeanP2PRequest, service::LeanChainService,
 };
 use ream_checkpoint_sync::initialize_db_from_checkpoint;
 use ream_consensus_lean::{
     attestation::{Attestation, AttestationData},
     block::{BlockWithAttestation, SignedBlockWithAttestation},
     checkpoint::Checkpoint,
+    validator::Validator,
 };
 use ream_consensus_misc::{
     constants::beacon::set_genesis_validator_root, misc::compute_epoch_at_slot,
 };
 use ream_executor::ReamExecutor;
-use ream_fork_choice_lean::store::Store;
+use ream_fork_choice_lean::{genesis as lean_genesis, store::Store};
 use ream_keystore::keystore::EncryptedKeystore;
 use ream_network_manager::service::NetworkManagerService;
 use ream_network_spec::networks::{
-    beacon_network_spec, set_beacon_network_spec, set_lean_network_spec,
+    beacon_network_spec, lean_network_spec, set_beacon_network_spec, set_lean_network_spec,
 };
 use ream_operation_pool::OperationPool;
 use ream_p2p::{
@@ -54,7 +58,9 @@ use ream_p2p::{
     },
     network::lean::{LeanNetworkConfig, LeanNetworkService},
 };
-use ream_post_quantum_crypto::hashsig::private_key::PrivateKey as HashSigPrivateKey;
+use ream_post_quantum_crypto::leansig::{
+    private_key::PrivateKey as LeanSigPrivateKey, public_key::PublicKey,
+};
 use ream_rpc_common::config::RpcServerConfig;
 use ream_storage::{
     db::{ReamDB, reset_db},
@@ -67,8 +73,7 @@ use ream_validator_beacon::{
     voluntary_exit::process_voluntary_exit,
 };
 use ream_validator_lean::{
-    registry::{load_validator_public_keys, load_validator_registry},
-    service::ValidatorService as LeanValidatorService,
+    registry::load_validator_registry, service::ValidatorService as LeanValidatorService,
 };
 use ssz_types::VariableList;
 use tokio::{sync::mpsc, time::Instant};
@@ -89,8 +94,8 @@ fn main() {
         true => EnvFilter::builder().parse_lossy(cli.verbosity.directive()),
         false => EnvFilter::builder().parse_lossy(rust_log),
     };
-
     tracing_subscriber::fmt().with_env_filter(env_filter).init();
+    info!("\n{}", startup_message());
 
     let executor = ReamExecutor::new().expect("unable to create executor");
     let executor_clone = executor.clone();
@@ -121,6 +126,10 @@ fn main() {
         }
         Commands::GeneratePrivateKey(config) => {
             executor_clone.spawn(async move { run_generate_private_key(*config).await });
+        }
+        Commands::GenerateKeystore(config) => {
+            run_generate_validator_registry(*config).expect("failed to generate hash-sig keystore");
+            process::exit(0);
         }
     }
 
@@ -161,16 +170,10 @@ pub async fn run_lean_node(config: LeanNodeConfig, executor: ReamExecutor, ream_
 
     let keystores = load_validator_registry(&config.validator_registry_path, &config.node_id)
         .expect("Failed to load validator registry");
-    let mut validator_keys_manifest_path = config.validator_registry_path;
-    validator_keys_manifest_path.pop();
-    validator_keys_manifest_path.push("hash-sig-keys/validator-keys-manifest.yaml");
-    let validators = load_validator_public_keys(&validator_keys_manifest_path)
-        .expect("Failed to get load_validator_public_keys");
 
     // Fill in which devnet we are running
     let mut network = config.network;
     network.devnet = config.devnet;
-    network.num_validators = validators.len() as u64;
     set_lean_network_spec(Arc::new(network));
 
     // Initialize the lean database
@@ -185,7 +188,17 @@ pub async fn run_lean_node(config: LeanNodeConfig, executor: ReamExecutor, ream_
     let (outbound_p2p_sender, outbound_p2p_receiver) = mpsc::unbounded_channel::<LeanP2PRequest>();
 
     // Initialize the lean chain with genesis block and state.
-    let (genesis_block, genesis_state) = lean_genesis::setup_genesis(validators);
+    let validators = lean_network_spec()
+        .validator_public_keys
+        .iter()
+        .enumerate()
+        .map(|(index, public_key)| Validator {
+            public_key: PublicKey::new(*public_key),
+            index: index as u64,
+        })
+        .collect::<Vec<_>>();
+    let (genesis_block, genesis_state) =
+        lean_genesis::setup_genesis(lean_network_spec().genesis_time, validators);
     let (lean_chain_writer, lean_chain_reader) = Writer::new(
         Store::get_forkchoice_store(
             SignedBlockWithAttestation {
@@ -205,6 +218,7 @@ pub async fn run_lean_node(config: LeanNodeConfig, executor: ReamExecutor, ream_
             },
             genesis_state,
             lean_db,
+            None,
         )
         .expect("Could not get forkchoice store"),
     );
@@ -476,7 +490,7 @@ pub async fn run_account_manager(config: AccountManagerConfig, ream_dir: PathBuf
             config.passphrase.as_deref().unwrap_or(""),
         );
 
-        let (public_key, _private_key) = HashSigPrivateKey::generate_key_pair(
+        let (public_key, _private_key) = LeanSigPrivateKey::generate_key_pair(
             &mut <ChaCha20Rng as SeedableRng>::from_seed(seed),
             config.activation_epoch as usize,
             config.num_active_epochs as usize,

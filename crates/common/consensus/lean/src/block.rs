@@ -1,6 +1,6 @@
 use alloy_primitives::B256;
 use anyhow::{anyhow, ensure};
-use ream_post_quantum_crypto::hashsig::signature::Signature;
+use ream_post_quantum_crypto::leansig::signature::Signature;
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
 use ssz_types::{VariableList, typenum::U4096};
@@ -17,7 +17,11 @@ pub struct SignedBlockWithAttestation {
 }
 
 impl SignedBlockWithAttestation {
-    pub fn verify_signatures(&self, parent_state: &LeanState) -> anyhow::Result<bool> {
+    pub fn verify_signatures(
+        &self,
+        parent_state: &LeanState,
+        verify_signatures: bool,
+    ) -> anyhow::Result<bool> {
         let block = &self.message.block;
         let signatures = &self.signature;
         let mut all_attestations = block.body.attestations.to_vec();
@@ -42,14 +46,16 @@ impl SignedBlockWithAttestation {
                 .get(validator_id)
                 .ok_or(anyhow!("Failed to get validator"))?;
 
-            ensure!(
-                signature.verify(
-                    &validator.public_key,
-                    attestation.data.slot as u32,
-                    &attestation.tree_hash_root(),
-                )?,
-                "Failed to verify"
-            );
+            if verify_signatures {
+                ensure!(
+                    signature.verify(
+                        &validator.public_key,
+                        attestation.data.slot as u32,
+                        &attestation.tree_hash_root(),
+                    )?,
+                    "Failed to verify"
+                );
+            }
         }
 
         Ok(true)
@@ -100,9 +106,6 @@ impl From<Block> for BlockHeader {
 /// Represents the body of a block in the Lean chain.
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, Encode, Decode, TreeHash)]
 pub struct BlockBody {
-    /// TODO: Diverged from current ongoing spec change. This should be
-    /// `VariableList<Attestation, U4096>`.
-    /// Tracking issue: https://github.com/ReamLabs/ream/issues/856
     pub attestations: VariableList<Attestation, U4096>,
 }
 

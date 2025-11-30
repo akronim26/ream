@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use ream_post_quantum_crypto::hashsig::{private_key::PrivateKey, public_key::PublicKey};
+use ream_post_quantum_crypto::leansig::{private_key::PrivateKey, public_key::PublicKey};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
@@ -25,8 +25,7 @@ pub struct ValidatorKeystoreRaw {
     pub privkey_file: String,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, PartialEq)]
 pub struct ValidatorKeystore {
     pub index: u64,
     pub public_key: PublicKey,
@@ -38,4 +37,12 @@ pub struct ValidatorKeystore {
 pub struct ValidatorRegistry {
     #[serde(flatten)]
     pub nodes: HashMap<String, Vec<u64>>,
+}
+
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "UPPERCASE")]
+pub struct ConfigFile {
+    pub genesis_time: u64,
+    pub num_validators: u64,
+    pub genesis_validators: Vec<PublicKey>,
 }

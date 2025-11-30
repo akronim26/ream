@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::anyhow;
 use ream_consensus_lean::{
     attestation::{AttestationData, SignedAttestation},
@@ -5,6 +7,7 @@ use ream_consensus_lean::{
 };
 use ream_fork_choice_lean::store::LeanStoreWriter;
 use ream_network_spec::networks::lean_network_spec;
+use ream_network_state_lean::NetworkState;
 use ream_storage::tables::{field::REDBField, table::REDBTable};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{Level, debug, enabled, error, info, warn};
@@ -24,6 +27,7 @@ pub struct LeanChainService {
     store: LeanStoreWriter,
     receiver: mpsc::UnboundedReceiver<LeanChainServiceMessage>,
     outbound_gossip: mpsc::UnboundedSender<LeanP2PRequest>,
+    network_state: Arc<NetworkState>,
 }
 
 impl LeanChainService {
@@ -32,7 +36,9 @@ impl LeanChainService {
         receiver: mpsc::UnboundedReceiver<LeanChainServiceMessage>,
         outbound_gossip: mpsc::UnboundedSender<LeanP2PRequest>,
     ) -> Self {
+        let network_state = store.read().await.network_state.clone();
         LeanChainService {
+            network_state,
             store,
             receiver,
             outbound_gossip,
@@ -66,10 +72,29 @@ impl LeanChainService {
                                 .get(head)?.ok_or_else(|| anyhow!("Post state not found for head: {head}"))?;
 
                             info!(
-                                slot = get_current_slot(),
+                                "\n\
+                            ============================================================\n\
+                            REAM's CHAIN STATUS: Next Slot: {current_slot} | Head Slot: {head_slot}\n\
+                            ------------------------------------------------------------\n\
+                            Connected Peers:   {connected_peer_count}\n\
+                            ------------------------------------------------------------\n\
+                            Head Block Root:   {head_block_root}\n\
+                            Parent Block Root: {parent_block_root}\n\
+                            State Root:        {state_root}\n\
+                            ------------------------------------------------------------\n\
+                            Latest Justified:  Slot {justified_slot} | Root: {justified_root}\n\
+                            Latest Finalized:  Slot {finalized_slot} | Root: {finalized_root}\n\
+                            ============================================================",
+                                current_slot     = get_current_slot(),
+                                head_slot        = head_state.slot,
+                                connected_peer_count = self.network_state.connected_peers(),
+                                head_block_root   = head.to_string(),
+                                parent_block_root = head_state.latest_block_header.parent_root,
+                                state_root        = head_state.tree_hash_root(),
                                 justified_slot = head_state.latest_justified.slot,
+                                justified_root = head_state.latest_justified.root,
                                 finalized_slot = head_state.latest_finalized.slot,
-                                "Current head state information",
+                                finalized_root = head_state.latest_finalized.root,
                             );
                         }
                         2 => {
@@ -217,7 +242,12 @@ impl LeanChainService {
         slot: u64,
         response: oneshot::Sender<AttestationData>,
     ) -> anyhow::Result<()> {
-        let attestation_data = self.store.read().await.produce_attestation(slot).await?;
+        let attestation_data = self
+            .store
+            .read()
+            .await
+            .produce_attestation_data(slot)
+            .await?;
 
         // Send the built attestation data back to the requester
         response
@@ -234,7 +264,7 @@ impl LeanChainService {
         self.store
             .write()
             .await
-            .on_block(signed_block_with_attestation)
+            .on_block(signed_block_with_attestation, true)
             .await?;
 
         Ok(())
