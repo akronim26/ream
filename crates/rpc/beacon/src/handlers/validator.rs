@@ -5,7 +5,6 @@ use actix_web::{
     web::{Data, Json, Path, Query},
 };
 use alloy_primitives::{Address, B256, U256};
-use hashbrown::HashMap;
 use ream_api_types_beacon::{
     block::{FullBlockData, ProduceBlockData, ProduceBlockResponse},
     committee::BeaconCommitteeSubscription,
@@ -45,6 +44,7 @@ use ream_consensus_misc::{
     misc::{compute_domain, compute_epoch_at_slot, compute_signing_root},
     validator::Validator,
 };
+use ream_discv5::discovery::Discovery;
 use ream_events_beacon::{
     BeaconEvent, contribution_and_proof::SignedContributionAndProof,
     event::sync_committee::ContributionAndProofEvent,
@@ -62,7 +62,6 @@ use ream_operation_pool::OperationPool;
 use ream_storage::{db::beacon::BeaconDB, tables::field::REDBField};
 use ream_validator_beacon::{
     aggregate_and_proof::SignedAggregateAndProof,
-    attestation::compute_subnet_for_attestation,
     builder::{
         builder_bid::SignedBuilderBid, builder_client::BuilderClient,
         validator_registration::SignedValidatorRegistrationV1,
@@ -79,7 +78,7 @@ use ssz_types::{
     VariableList,
     typenum::{U1, U8, U16},
 };
-use tokio::sync::broadcast;
+use tokio::sync::{Mutex, broadcast};
 use tree_hash::TreeHash;
 
 use super::state::get_state_from_id;
@@ -680,11 +679,10 @@ pub async fn post_aggregate_and_proofs_v2(
 
 #[post("/validator/beacon_committee_subscriptions")]
 pub async fn post_beacon_committee_subscriptions(
-    db: Data<BeaconDB>,
-    subscriptions: Json<Vec<BeaconCommitteeSubscription>>,
-) -> Result<impl Responder, ApiError> {
-    let mut subnet_to_subscriptions: HashMap<u64, Vec<BeaconCommitteeSubscription>> =
-        HashMap::new();
+    db: actix_web::web::Data<BeaconDB>,
+    subscriptions: actix_web::web::Json<Vec<BeaconCommitteeSubscription>>,
+    discovery: Data<Mutex<Discovery>>,
+) -> Result<impl actix_web::Responder, ApiError> {
     for sub in subscriptions.into_inner() {
         let state = get_state_from_id(ID::Slot(sub.slot), &db).await?;
         if sub.committees_at_slot > MAX_COMMITTEES_PER_SLOT {
@@ -710,17 +708,11 @@ pub async fn post_beacon_committee_subscriptions(
             ));
         }
 
-        let subnet_id =
-            compute_subnet_for_attestation(sub.committees_at_slot, sub.slot, sub.committee_index);
-
-        subnet_to_subscriptions
-            .entry(subnet_id)
-            .or_default()
-            .push(sub);
+        {
+            let mut discovery = discovery.lock().await;
+            let _ = discovery.update_attestation_subnets(sub.slot);
+        }
     }
-
-    // TODO
-    // add support for attestation subnet subscriptions for validators
 
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "data": "success"
